@@ -257,7 +257,8 @@ html,body{height:100%;font-family:'DM Sans','JetBrains Mono',sans-serif;backgrou
     <p id="exportMsg">Choose an export format.</p>
     <div class="export-choices" id="exportChoices">
       <button class="btn" onclick="doExportImage()" id="exportImgBtn" style="width:100%;justify-content:center;padding:10px;margin-bottom:6px">📷 Download as PNG (1920×1080)</button>
-      <button class="btn" onclick="doExportVideo()" id="exportVidBtn" style="width:100%;justify-content:center;padding:10px">🎬 Download as Video (WebM)</button>
+      <button class="btn" onclick="doExportVideo('mp4')" id="exportMp4Btn" style="width:100%;justify-content:center;padding:10px;margin-bottom:6px">🎬 Download as MP4</button>
+      <button class="btn" onclick="doExportVideo('mov')" id="exportMovBtn" style="width:100%;justify-content:center;padding:10px">🎬 Download as MOV</button>
     </div>
     <div class="export-progress" id="exportProgressWrap" style="display:none"><div class="export-progress-bar" id="exportBar"></div></div>
     <button class="btn" id="exportCancelBtn" onclick="cancelExport()" style="margin-top:12px">Close</button>
@@ -510,7 +511,8 @@ function startExport(){
   const bar=document.getElementById('exportBar');
   const cancelBtn=document.getElementById('exportCancelBtn');
   const imgBtn=document.getElementById('exportImgBtn');
-  const vidBtn=document.getElementById('exportVidBtn');
+  const mp4Btn=document.getElementById('exportMp4Btn');
+  const movBtn=document.getElementById('exportMovBtn');
 
   overlay.classList.add('visible');
   exportCancelled=false;
@@ -526,14 +528,16 @@ function startExport(){
     title.textContent='Export Timeline';
     msg.textContent=`${timeline.length} frames in your timeline.`;
     imgBtn.textContent='📷 Download PNGs (one per frame)';
-    vidBtn.textContent='🎬 Download as Video (WebM)';
-    imgBtn.style.display='';vidBtn.style.display='';
+    mp4Btn.textContent='🎬 Download as MP4';
+    movBtn.textContent='🎬 Download as MOV';
+    imgBtn.style.display='';mp4Btn.style.display='';movBtn.style.display='';
   } else {
     title.textContent='Export Board';
     msg.textContent='Export the current board state.';
     imgBtn.textContent='📷 Download as PNG (1920×1080)';
-    vidBtn.textContent='🎬 Download as Video (WebM)';
-    imgBtn.style.display='';vidBtn.style.display='';
+    mp4Btn.textContent='🎬 Download as MP4';
+    movBtn.textContent='🎬 Download as MOV';
+    imgBtn.style.display='';mp4Btn.style.display='';movBtn.style.display='';
   }
 }
 
@@ -600,7 +604,53 @@ function doExportImage(){
   }
 }
 
-async function doExportVideo(){
+function darkenHex(hex,amount){
+  if(!hex.startsWith('#')||hex.length<7)return hex;
+  const r=Math.round(parseInt(hex.slice(1,3),16)*(1-amount));
+  const g=Math.round(parseInt(hex.slice(3,5),16)*(1-amount));
+  const b=Math.round(parseInt(hex.slice(5,7),16)*(1-amount));
+  return `rgb(${r},${g},${b})`;
+}
+
+function renderVideoFrame(ctx,cellStates,p){
+  const {px,py,cW,cH,gH,gV,fs}=p;
+  ctx.fillStyle='#111';ctx.beginPath();ctx.roundRect(0,0,1920,1080,10);ctx.fill();
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const x=px+c*(cW+gH),y=py+r*(cH+gV);
+      const cell=cellStates[r][c];
+      const bg=cell.color?(COLOR_MAP[cell.color]||cell.color):'#1a1a1a';
+      const textColor=cell.color==='white'?'#111':'#fff';
+      const halfH=cH/2-1,midY=y+cH/2;
+      const fp=cell.flipProgress;
+      // Top and bottom backgrounds
+      ctx.fillStyle=bg;ctx.beginPath();ctx.roundRect(x,y,cW,halfH,[4,4,0,0]);ctx.fill();
+      ctx.fillStyle=bg;ctx.beginPath();ctx.roundRect(x,midY+1,cW,halfH,[0,0,4,4]);ctx.fill();
+      // Flip piece overlay
+      if(fp!=null&&fp>0&&fp<1){
+        if(fp<0.5){
+          const phase=fp/0.5;
+          const flipH=halfH*(1-Math.sin(phase*Math.PI/2));
+          if(flipH>1){ctx.fillStyle=darkenHex(bg,phase*0.45);ctx.fillRect(x+1,midY-1-flipH,cW-2,flipH);}
+        } else {
+          const phase=(fp-0.5)/0.5;
+          const flipH=halfH*Math.sin(phase*Math.PI/2);
+          if(flipH>1){ctx.fillStyle=darkenHex(bg,(1-phase)*0.45);ctx.fillRect(x+1,midY+1,cW-2,flipH);}
+        }
+      }
+      // Center split line
+      ctx.fillStyle='#000';ctx.fillRect(x,midY-1,cW,2);
+      // Character clipped to each half
+      if(cell.char&&cell.char!==' '){
+        ctx.fillStyle=textColor;ctx.font=`bold ${fs}px 'JetBrains Mono',monospace`;ctx.textAlign='center';ctx.textBaseline='middle';
+        ctx.save();ctx.beginPath();ctx.rect(x,y,cW,halfH);ctx.clip();ctx.fillText(cell.char,x+cW/2,y+cH/2);ctx.restore();
+        ctx.save();ctx.beginPath();ctx.rect(x,midY+1,cW,halfH);ctx.clip();ctx.fillText(cell.char,x+cW/2,y+cH/2);ctx.restore();
+      }
+    }
+  }
+}
+
+async function doExportVideo(format){
   const title=document.getElementById('exportTitle');
   const msg=document.getElementById('exportMsg');
   const choices=document.getElementById('exportChoices');
@@ -611,31 +661,111 @@ async function doExportVideo(){
   choices.style.display='none';
   progressWrap.style.display='block';
   bar.style.width='0%';
-  title.textContent='Exporting Video…';
-  msg.textContent='Recording at 1920×1080.';
+  title.textContent=`Exporting ${format.toUpperCase()}…`;
+  msg.textContent='Rendering flip animations at 1920×1080.';
   cancelBtn.textContent='Cancel';cancelBtn.onclick=cancelExport;
   exportCancelled=false;
 
-  const p=getExportParams();
-  const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=1080;
-  const ctx=canvas.getContext('2d');
-
-  const frames=timeline.length>1?timeline:[{state:captureState(),duration:2000}];
-  const stream=canvas.captureStream(30);const chunks=[];let recorder;
-  try{recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp9',videoBitsPerSecond:8000000});}
-  catch(e){try{recorder=new MediaRecorder(stream,{mimeType:'video/webm',videoBitsPerSecond:8000000});}catch(e2){title.textContent='Export Failed';msg.textContent='Browser unsupported.';cancelBtn.textContent='Close';cancelBtn.onclick=cancelExport;return;}}
-  recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};recorder.start();
-  const totalDur=frames.reduce((s,f)=>s+f.duration+1000,0);let elapsed=0;
-  for(const frame of frames){
-    if(exportCancelled)break;
-    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){if(exportCancelled)break;renderCanvas(ctx,frame.state,p.cW,p.cH,p.gH,p.gV,p.px,p.py,p.fs);await sleep(16);elapsed+=16;bar.style.width=`${Math.min(95,(elapsed/totalDur)*100)}%`;}
-    const holdEnd=elapsed+frame.duration;while(elapsed<holdEnd&&!exportCancelled){renderCanvas(ctx,frame.state,p.cW,p.cH,p.gH,p.gV,p.px,p.py,p.fs);await sleep(33);elapsed+=33;bar.style.width=`${Math.min(95,(elapsed/totalDur)*100)}%`;}
+  if(typeof VideoEncoder==='undefined'){
+    title.textContent='Browser Not Supported';
+    msg.textContent='MP4/MOV export requires Chrome or Edge 94+.';
+    progressWrap.style.display='none';cancelBtn.textContent='Close';cancelBtn.onclick=cancelExport;return;
   }
-  recorder.stop();await new Promise(r=>{recorder.onstop=r;});
-  if(exportCancelled){document.getElementById('exportOverlay').classList.remove('visible');return;}
-  bar.style.width='100%';title.textContent='Done!';msg.textContent='Your 1920×1080 video is ready.';
-  const blob=new Blob(chunks,{type:'video/webm'});const url=URL.createObjectURL(blob);
-  cancelBtn.textContent='Download';cancelBtn.onclick=()=>{const a=document.createElement('a');a.href=url;a.download='splitflap-board.webm';a.click();URL.revokeObjectURL(url);document.getElementById('exportOverlay').classList.remove('visible');};
+
+  try{
+    const {Muxer,ArrayBufferTarget}=await import('https://cdn.jsdelivr.net/npm/mp4-muxer/+esm');
+    await document.fonts.ready;
+    const p=getExportParams();
+    const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=1080;
+    const ctx=canvas.getContext('2d');
+    const FPS=30;
+    const target=new ArrayBufferTarget();
+    const muxer=new Muxer({target,video:{codec:'avc',width:1920,height:1080},fastStart:'in-memory'});
+    const encoder=new VideoEncoder({
+      output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),
+      error:e=>console.error('VideoEncoder error:',e)
+    });
+    encoder.configure({codec:'avc1.640028',width:1920,height:1080,bitrate:8_000_000});
+    let frameIdx=0;
+    function encodeFrame(){
+      const vf=new VideoFrame(canvas,{timestamp:Math.round((frameIdx/FPS)*1_000_000)});
+      encoder.encode(vf,{keyFrame:frameIdx%30===0});vf.close();frameIdx++;
+    }
+    // Single-frame: animate from blank so the flip-in is captured
+    const blank=Array.from({length:ROWS},()=>Array.from({length:COLS},()=>({char:' ',color:''})));
+    const timelineFrames=timeline.length>1?timeline:[{state:blank,duration:200},{state:captureState(),duration:3000}];
+    const totalVF=timelineFrames.reduce((s,f,i)=>s+Math.round((f.duration/1000)*FPS)+(i>0?Math.ceil(2*FPS):0),0);
+
+    for(let fi=0;fi<timelineFrames.length;fi++){
+      if(exportCancelled)break;
+      // Animate transition from previous frame
+      if(fi>0){
+        const prev=timelineFrames[fi-1].state,next=timelineFrames[fi].state;
+        const changes=[];
+        for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)
+          if(prev[r][c].char!==next[r][c].char||prev[r][c].color!==next[r][c].color)changes.push({r,c});
+        shuffle(changes);
+        changes.forEach((cell,i)=>{
+          const tgt=next[cell.r][cell.c].char;
+          const count=tgt===' '?2:Math.floor(Math.random()*5)+4;
+          cell.steps=[];
+          for(let s=0;s<count;s++)cell.steps.push(FLIP_CHARS[Math.floor(Math.random()*FLIP_CHARS.length)]);
+          cell.steps.push(tgt);
+          cell.startTime=(changes.length>1?i/(changes.length-1):0)*0.4;
+          cell.stepDurs=cell.steps.map((_,si)=>si===cell.steps.length-1?0.14:0.08);
+          cell.totalDur=cell.stepDurs.reduce((a,b)=>a+b,0);
+        });
+        const maxEnd=changes.length?Math.max(...changes.map(c=>c.startTime+c.totalDur)):0;
+        const transFrames=Math.ceil(Math.max(maxEnd,0.1)*FPS)+2;
+        for(let tf=0;tf<=transFrames;tf++){
+          if(exportCancelled)break;
+          const t=tf/FPS;
+          const cellStates=prev.map(row=>row.map(cell=>({...cell,flipProgress:null})));
+          for(const cell of changes){
+            const elapsed=t-cell.startTime;if(elapsed<0)continue;
+            let cum=0,stepIdx=-1,stepProg=0;
+            for(let s=0;s<cell.steps.length;s++){
+              if(elapsed<cum+cell.stepDurs[s]){stepIdx=s;stepProg=(elapsed-cum)/cell.stepDurs[s];break;}
+              cum+=cell.stepDurs[s];
+            }
+            if(stepIdx===-1){
+              cellStates[cell.r][cell.c]={char:next[cell.r][cell.c].char,color:next[cell.r][cell.c].color,flipProgress:null};
+            } else {
+              cellStates[cell.r][cell.c]={char:cell.steps[stepIdx],color:next[cell.r][cell.c].color,flipProgress:stepProg};
+            }
+          }
+          renderVideoFrame(ctx,cellStates,p);encodeFrame();
+          bar.style.width=`${Math.min(95,(frameIdx/totalVF)*100)}%`;
+          if(tf%5===0)await sleep(0);
+        }
+      }
+      // Hold static frame
+      const holdFrames=Math.round((timelineFrames[fi].duration/1000)*FPS);
+      const staticState=timelineFrames[fi].state.map(row=>row.map(cell=>({...cell,flipProgress:null})));
+      for(let hf=0;hf<holdFrames;hf++){
+        if(exportCancelled)break;
+        renderVideoFrame(ctx,staticState,p);encodeFrame();
+        bar.style.width=`${Math.min(95,(frameIdx/totalVF)*100)}%`;
+        if(hf%10===0)await sleep(0);
+      }
+    }
+    if(exportCancelled){document.getElementById('exportOverlay').classList.remove('visible');return;}
+    await encoder.flush();muxer.finalize();
+    bar.style.width='100%';title.textContent='Done!';msg.textContent=`Your ${format.toUpperCase()} is ready.`;
+    const mimeType=format==='mov'?'video/quicktime':'video/mp4';
+    const blob=new Blob([target.buffer],{type:mimeType});
+    const url=URL.createObjectURL(blob);
+    cancelBtn.textContent='Download';
+    cancelBtn.onclick=()=>{
+      const a=document.createElement('a');a.href=url;a.download=`splitflap-board.${format}`;a.click();
+      URL.revokeObjectURL(url);document.getElementById('exportOverlay').classList.remove('visible');
+    };
+  }catch(e){
+    console.error('Export error:',e);
+    title.textContent='Export Failed';
+    msg.textContent=`Error: ${e.message}. Please use Chrome or Edge.`;
+    progressWrap.style.display='none';cancelBtn.textContent='Close';cancelBtn.onclick=cancelExport;
+  }
 }
 
 function cancelExport(){exportCancelled=true;document.getElementById('exportOverlay').classList.remove('visible');}
